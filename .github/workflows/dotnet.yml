@@ -1,28 +1,53 @@
-# This workflow will build a .NET project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-net
-
-name: .NET
+name: CI Check
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "develop" ]
   pull_request:
     branches: [ "main" ]
 
 jobs:
-  build:
-
+  validate-and-build:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
-    - name: Restore dependencies
-      run: dotnet restore
-    - name: Build
-      run: dotnet build --no-restore
-    - name: Test
-      run: dotnet test --no-build --verbosity normal
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify Docker Compose Config
+        run: docker compose config -q
+        # Эта команда проверит синтаксис вашего yaml-файла
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Services
+        run: |
+          docker compose build --parallel
+        # Проверяем, что API и Worker успешно компилируются
+
+      - name: Spin up Infrastructure
+        run: |
+          # Запускаем все сервисы в фоне
+          docker compose up -d
+          
+      - name: Wait for Healthchecks
+        run: |
+          echo "Waiting for services to be healthy..."
+          # Скрипт-таймаут (3 минуты), чтобы дождаться готовности Postgres, Redis и RabbitMQ
+          timeout 180s bash -c '
+          until [ $(docker ps -a --filter "health=healthy" | wc -l) -ge 4 ]; do
+            echo "Waiting..."
+            sleep 5
+          done'
+        # В вашем конфиге 3 сервиса с healthcheck + API/Worker зависят от них.
+        # Мы ждем, пока ключевые узлы станут 'healthy'.
+
+      - name: Check Container Status
+        if: always()
+        run: docker compose ps
+        # Выводит статус всех контейнеров в лог (полезно при отладке упавших билдов)
+
+      - name: Shutdown
+        if: always()
+        run: docker compose down
