@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  highload.streamline.api:
+    build:
+      context: .
+      dockerfile: src/HighLoad.Streamline.Api/Dockerfile
+    container_name: streamline-api
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__RabbitMq=rabbitmq://guest:guest@rabbitmq
+      - ConnectionStrings__Redis=redis:6379,password=streamline_pass,abortConnect=false
+      - ConnectionStrings__Postgres=Host=postgres;Database=highload_db;Username=admin;Password=p@ssword
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks:
+      - streamline-network
+
+  highload.streamline.worker:
+    build:
+      context: .
+      dockerfile: src/HighLoad.Streamline.Worker/Dockerfile
+    container_name: streamline-worker
+    environment:
+      - ConnectionStrings__RabbitMq=rabbitmq://guest:guest@rabbitmq
+      - ConnectionStrings__Postgres=Host=postgres;Database=highload_db;Username=admin;Password=p@ssword
+      - ConnectionStrings__Redis=redis:6379,password=streamline_pass,abortConnect=false
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks:
+      - streamline-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: streamline-redis
+    command: redis-server --requirepass streamline_pass
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "streamline_pass", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - streamline-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: streamline-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: highload_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: p@ssword
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d highload_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - streamline-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: streamline-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - streamline-network
+
+  seq:
+    image: datalust/seq:latest
+    container_name: streamline-seq
+    environment:
+      - ACCEPT_EULA=Y
+      - SEQ_FIRSTRUN_NOAUTHENTICATION=true
+    ports:
+      - "8081:80"
+    networks:
+      - streamline-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: streamline-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - streamline-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: streamline-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    networks:
+      - streamline-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: streamline-elastic
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false 
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    networks:
+      - streamline-network
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.0
+    container_name: streamline-logstash
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    ports:
+      - "5044:5044"
+    depends_on:
+      - elasticsearch
+    networks:
+      - streamline-network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: streamline-kibana
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - streamline-network
+
+networks:
+  streamline-network:
+    driver: bridge

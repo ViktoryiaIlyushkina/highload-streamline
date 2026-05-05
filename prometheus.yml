@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s # Собираем данные каждые 5 секунд
+
+scrape_configs:
+  - job_name: 'streamline-api'
+    static_configs:
+      - targets: ['highload.streamline.api:8080'] # Имя сервиса и порт внутри сети Docker
+
+  - job_name: 'streamline-worker'
+    static_configs:
+      - targets: ['highload.streamline.worker:8080']
